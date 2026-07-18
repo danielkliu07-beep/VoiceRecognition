@@ -7,8 +7,6 @@ class Res2DilatedConv1D(nn.Module):
 
     def __init__(self, channels, kernel_size = 3, dilation = 1, scale = 8): #Scale = 8 -> Split input into 8 chunks
 
-        #kernel size = 3, dilation = 1, scale = 8
-
         super().__init__()
 
         assert channels % scale == 0
@@ -18,7 +16,7 @@ class Res2DilatedConv1D(nn.Module):
 
         padding = dilation * (kernel_size - 1) // 2 #Padding is calculated to ensure temporal dimension (T) remains unchanged
 
-        self.convolutions = nn.ModuleList([nn.Conv1d(in_features = self.width, out_features = self.width, kernel_size = kernel_size, dilation = dilation, padding = padding) for _ in range(self.scale - 1)])
+        self.convolutions = nn.ModuleList([nn.Conv1d(in_channels = self.width, out_channels = self.width, kernel_size = kernel_size, dilation = dilation, padding = padding) for _ in range(self.scale - 1)])
 
     def forward(self, x): #x shape = (batch, channel, time)
 
@@ -64,36 +62,38 @@ class SE_Block(nn.Module):
         s = F.sigmoid(s)
 
         s = s.unsqueeze(2) #Turns s back into a (batch, channel, time) shape so we can multiply it with the orignal input
-        out = s @ x
+        out = s * x
 
         return out
 
 
 class SE_Res2Block(nn.Module):
 
-    def __init__(self, channels, temporal_dim):
+    def __init__(self, channels, kernel_size = 3, dilation = 2, scale = 8):
+
+        #kernel size = 3, dilation = 1, scale = 8
         
         super().__init__()
 
         self.block1 = nn.Sequential(
-            nn.Conv1d(in_features = temporal_dim, out_features = channels),
+            nn.Conv1d(in_channels = channels, out_channels = channels, kernel_size = 1),
             nn.ReLU(),
             nn.BatchNorm1d(num_features = channels)
         )
 
         self.block2 = nn.Sequential(
-            Res2DilatedConv1D(channels),
+            Res2DilatedConv1D(channels, kernel_size = kernel_size, dilation = dilation, scale = scale),
             nn.ReLU(),
             nn.BatchNorm1d(num_features = channels)
         )
 
         self.block3 = nn.Sequential(
-            nn.Conv1d(in_features = temporal_dim, out_features = channels),
+            nn.Conv1d(in_channels = channels, out_channels = channels, kernel_size = 1),
             nn.ReLU(),
             nn.BatchNorm1d(num_features = channels)
         )
 
-        self.block4 = SE_Block(temporal_dim, channels)
+        self.block4 = SE_Block(reduced_dimension = 128, channels = channels)
 
 
     def forward(self, x):
@@ -109,18 +109,55 @@ class SE_Res2Block(nn.Module):
 
 class AttentiveStatPooling(nn.Module):
 
-    def __init__(self, channels):
+    def __init__(self, channels, reduced_dimension):
 
         super().__init__()
+
+        self.W1 = nn.Linear(in_features = channels, out_features = reduced_dimension)
+
+        self.W2 = nn.Linear(in_features = 1, out_features = reduced_dimension)
+    
+    def forward(self, x):
+
+        e = self.W1(x)
+
+        e = F.relu(e)
+
+        e = self.W2(e)
+
+        e.unsqueeze(0)
+
+        out = F.softmax(e)
+
+        return out
+
+
 
 
 class ECAPA_TDNN(nn.Module):
 
-    def __init__(self, channel, T):
+    def __init__(self, channels):
         
-        #Conv1D, ReLu, BN, kernel size = 5, dilation = 1, input = 80 * T, output = C * T
-        first_block = nn.Sequential(
-            nn.Conv1d(in_channels = 80 * T, out_channels = T * channel, kernel_size = 5, dilation = 1),
+        super().__init__()
+
+        self.block1 = nn.Sequential(
+            nn.Conv1d(in_channels = channels, out_channels = channels, kernel_size = 5, dilation = 1),
             nn.ReLU(),
-            nn.BatchNorm1d(num_features=C)
+            nn.BatchNorm1d(num_features = channels)
         )
+
+        self.block2 = SE_Res2Block(channels = channels, kernel_size = 3, dilation = 2, scale = 8)
+
+        self.block3 = SE_Res2Block(channels = channels, kernel_size = 3, dilation = 3, scale = 8)
+
+        self.block4 = SE_Res2Block(channels = channels, kernel_size = 3, dilation = 4, scale = 8)
+
+        self.block5 = nn.Sequential(
+            nn.Conv1d(in_channels = channels, out_channels = channels, kernel_size = 1, dilation = 1),
+            nn.ReLU()
+        )
+
+
+
+    def forward(x):
+        pass
