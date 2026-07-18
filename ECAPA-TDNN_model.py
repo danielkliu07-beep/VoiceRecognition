@@ -7,6 +7,8 @@ class Res2DilatedConv1D(nn.Module):
 
     def __init__(self, channels, kernel_size = 3, dilation = 1, scale = 8): #Scale = 8 -> Split input into 8 chunks
 
+        #kernel size = 3, dilation = 1, scale = 8
+
         super().__init__()
 
         assert channels % scale == 0
@@ -44,27 +46,24 @@ class SE_Block(nn.Module):
 
         super().__init__()
 
-        self.W1 = nn.Linear(in_features = reduced_dimension, out_features = channels)
-        self.b1 = nn.Parameter(torch.tensor(-5.), requires_grad = True)
+        #Note that in_features = col, out_features = row
 
-        self.W2 = nn.Linear(in_features = channels, out_features = reduced_dimension)
-        self.b2 = nn.Parameter(torch.tensor(-5.), requires_grad = True)
-
-
-
+        self.W1 = nn.Linear(in_features = channels, out_features = reduced_dimension)
+        self.W2 = nn.Linear(in_features = reduced_dimension, out_features = channels)
 
     
     def forward(self, x): #x shape = (batch, channel, time)
 
-        z = torch.mean(x, dim = 2)
+        z = torch.mean(x, dim = 2) #z shape = (batch, channel)
 
-        s = self.W1 @ z + self.b1
+        s = self.W1(z)
         s = F.relu(s)
 
-        s = self.W2 @ s + self.b2
+        s = self.W2(s)
 
         s = F.sigmoid(s)
 
+        s = s.unsqueeze(2) #Turns s back into a (batch, channel, time) shape so we can multiply it with the orignal input
         out = s @ x
 
         return out
@@ -72,18 +71,41 @@ class SE_Block(nn.Module):
 
 class SE_Res2Block(nn.Module):
 
-    def __init__(self):
+    def __init__(self, channels, temporal_dim):
         
         super().__init__()
 
+        self.block1 = nn.Sequential(
+            nn.Conv1d(in_features = temporal_dim, out_features = channels),
+            nn.ReLU(),
+            nn.BatchNorm1d(num_features = channels)
+        )
 
+        self.block2 = nn.Sequential(
+            Res2DilatedConv1D(channels),
+            nn.ReLU(),
+            nn.BatchNorm1d(num_features = channels)
+        )
 
-        pass
+        self.block3 = nn.Sequential(
+            nn.Conv1d(in_features = temporal_dim, out_features = channels),
+            nn.ReLU(),
+            nn.BatchNorm1d(num_features = channels)
+        )
+
+        self.block4 = SE_Block(temporal_dim, channels)
+
 
     def forward(self, x):
         
+        out = self.block1(x)
+        out = self.block2(out)
+        out = self.block3(out)
+        out = self.block4(out)
 
-        return x
+        out = out + x
+
+        return out
 
 class AttentiveStatPooling(nn.Module):
 
